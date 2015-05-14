@@ -10,15 +10,16 @@ import hashlib
 import threading
 import random
 
+
 class RequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 
-  #handle incoming GET request
+  # Handle incoming GET request
   def do_GET(self):
     sha256   = hashlib.sha256()
     filehash = self.path[1:]
     headers  = str(self.headers).split('\r\n')
 
-  #parse request headers
+  # Parse request headers
     for header in headers:
       if header.startswith('Range: bytes='):
         _range = header.split('=')[1]
@@ -26,7 +27,8 @@ class RequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         end    = _range.split('-')[1]
         break
 
-   #find file requested by matching on filehash and send the requested part of the file
+   # Find file requested by matching on filehash and send the
+   # requested part of the file
     files = os.listdir('.')
     for file in files:
       with open(file, 'rb') as f:
@@ -48,79 +50,76 @@ class RequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
           self.end_headers()
           self.wfile.write(data)
           return
-    #if the request is valid but all files have been iterated through, the file can not be found (404)
+    # If the request is valid but all files have been iterated through,
+    # the file can not be found (404)
     self.send_response(404)
 
 
 class ThreadingSimpleServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
     pass
 
-def download_block(peer, config, blocksize, blockindex):
-  blockcount = (config['filesize'] + (blocksize - 1)) / blocksize # rounding up
 
-  #get all peer info
-  ip = peer['ip']
-  port = peer['port']
-  feeder = peer['feeder']
-  progress = peer['progress']
-  updated = peer['updated']
-
-  filehash = config['filehash']
-  range_start = blocksize * blockindex
-
-#specify the range of bytes we want to request, special case -> skriv noget her
-  if blockindex == blockcount - 1:
-    range_end = config['filesize'] - 1
-  else:
-    range_end = range_start + blocksize - 1
-
-
-#create request and return data from response
-  conn    = httplib.HTTPConnection(ip, port)
-  headers = {
-    'Connection': 'close',
-    'Range':      'bytes=' + str(range_start) + '-' + str(range_end)
-  }
-  conn.request('GET', '/' + filehash, '', headers)
-
-  response = conn.getresponse()
-  data = response.read()
-
-  conn.close()
-  return data
-
-#loop
+# Checks for json files. If one is found, check if the output file
+# belonging to it has been downloaded. Else download it.
 def loop_download():
+  blocksize = int(sys.argv[3])
   while 1:
-    download()
+    files = os.listdir('.')
+    for file in files:
 
-def download():
-  blocksize = 1024
-  with open('ddo_dns.pdf.json', 'r') as f:
-    config = json.load(f)
+      if file.endswith('.json'):
 
-#if kaskasdes out file doesnt exist, create it
-  if not os.path.exists(config['filename']):
-    with open(config['filename'], 'wb') as f:
-      f.seek(config['filesize']-1)
-      f.write('\0')
+        # Open json file
+        with open(file, 'r') as f:
+          config   = json.load(f)
+          filename = config['filename']
+          if not active_thread(filename):
+            # If kaskasdes out file doesnt exist, create it
+            if not os.path.exists(filename):
+              with open(filename, 'wb') as f:
+                f.seek(config['filesize']-1)
+                f.write('\0')
+            
+            # Open output file
+            with open(filename, 'r') as f:
+              sha256 = hashlib.sha256()
+              sha256.update(f.read())
+              local_file_digest = sha256.hexdigest()
+              # If file is already downloaded and correct, continue.
+              # Else download what is missing
+              if local_file_digest == config['filehash']:
+                continue
+              else:
+                  download_thread = threading.Thread(target=download, name=filename, args=(config, blocksize))
+                  download_thread.daemon = True
+                  download_thread.start()
+
+
+# If a thread with the given name is active return true, else return false
+def active_thread(name):
+  thread_list = threading.enumerate()
+  for thread in thread_list:
+    if thread.getName() == name:
+      return 1
+  return 0
+
+
+# Downloads a file given by filename, with the blocksize blocksize
+# and with the .json file config.
+def download(config, blocksize):
+  print 'Amount of threads active: '
+  print threading.active_count()
 
   blockcount  = (config['filesize'] + (blocksize - 1)) / blocksize # rounding up
-  sha256      = hashlib.sha256()
-  sha256check = hashlib.sha256()
 
   with open(config['filename'], 'r+b') as rf:
 
- #check if file has already been downloaded
-    sha256check.update(rf.read())
-    local_file_digest = sha256check.hexdigest()
-    if local_file_digest == config['filehash']:
-      return
-
- #find all peers that have the file we want to download
+    # Find all peers that have the file we want to download,
+    # and set our own progress to 0.0
     peers = register_and_get_peers(config['filehash'], 0)
 
-  #match block of file with kaskade file per md5hash -- if there is a mismatch we need to download to correct block
+    # Match block of file with kaskade file per md5hash 
+    # -- if there is a mismatch we need to download the correct block
     for blockindex in range(0, blockcount):
       rf.seek(blockindex * blocksize)
 
@@ -148,9 +147,9 @@ def download():
         if hashsum != blockhashsum:
           print 'Unable to download block ' + str(blockindex)
 
-
-    #validate that the file has been correctly downloaded
+    # Validate that the file has been correctly downloaded
     rf.seek(0)
+    sha256 = hashlib.sha256()
     sha256.update(rf.read())
     print 'Hash for downloaded file: ' + str(sha256.hexdigest())
     if sha256.hexdigest() != config['filehash']:
@@ -158,11 +157,12 @@ def download():
       return
 
     print 'File ' + config['filename'] + ' downloaded correctly'
+    # Set our progress for the file to 1.0
     register_and_get_peers(config['filehash'], 1)
 
 
-
-#send POST request to tracker. Tracker will return a list of peers that we can download from
+# Send POST request to tracker. Tracker will return a list
+# of peers that we can download from
 def register_and_get_peers(filehash, progress):
   if progress:
     data = urllib.urlencode({'port': port, 'progress': '1.0'})
@@ -184,6 +184,44 @@ def register_and_get_peers(filehash, progress):
   peers = json.loads(peers)
   return peers
 
+# Download a block defined by blockindex, blocksize. 
+# The block is a part of the output file for the config file.
+# Peer is the ip to download the block from.
+def download_block(peer, config, blocksize, blockindex):
+  blockcount = (config['filesize'] + (blocksize - 1)) / blocksize # rounding up
+
+  # Get all peer info
+  ip = peer['ip']
+  port = peer['port']
+  feeder = peer['feeder']
+  progress = peer['progress']
+  updated = peer['updated']
+
+  filehash = config['filehash']
+  range_start = blocksize * blockindex
+
+  # Specify the range of bytes we want to request, special case -> skriv noget her
+  if blockindex == blockcount - 1:
+    range_end = config['filesize'] - 1
+  else:
+    range_end = range_start + blocksize - 1
+
+
+  # Create request and return data from response
+  conn    = httplib.HTTPConnection(ip, port)
+  headers = {
+    'Connection': 'close',
+    'Range':      'bytes=' + str(range_start) + '-' + str(range_end)
+  }
+  conn.request('GET', '/' + filehash, '', headers)
+
+  response = conn.getresponse()
+  data = response.read()
+
+  conn.close()
+  return data
+
+
 if __name__ == '__main__':
 
   os.chdir(sys.argv[1])
@@ -191,13 +229,15 @@ if __name__ == '__main__':
 
   server = ThreadingSimpleServer(('', port), RequestHandler)
 
-  download_thread = threading.Thread(target=loop_download)
-  download_thread.daemon = True
-  download_thread.start()
+  download_loop_thread = threading.Thread(target=loop_download, name='Download loop')
+  download_loop_thread.daemon = True
+  download_loop_thread.start()
   try:
 
       while 1:
           print 'Listening...'
+          print 'Amount of threads active: '
+          print threading.enumerate()
           server.handle_request()
   except KeyboardInterrupt:
       print "Finished"
