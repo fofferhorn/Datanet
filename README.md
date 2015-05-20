@@ -16,4 +16,3 @@ Skal have 3 input:
 
 ### Begrænsninger
 - Ingen sikkerhed?
-- 

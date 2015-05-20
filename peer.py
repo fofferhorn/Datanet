@@ -107,8 +107,9 @@ def active_thread(name):
 # Downloads a file given by filename, with the blocksize blocksize
 # and with the .json file config.
 def download(config, blocksize):
-  print 'Amount of threads active: '
-  print threading.active_count()
+  print '\n\nDownloading file: '
+  print threading.current_thread().getName()
+  print '\n'
 
   blockcount  = (config['filesize'] + (blocksize - 1)) / blocksize # rounding up
 
@@ -134,12 +135,11 @@ def download(config, blocksize):
           if not peer['feeder']:
             continue
 
-          print 'Downloading file from ' + peer['ip']
+          print 'Downloading...'
           bytedata = download_block(peer, config, blocksize, blockindex)
           hashsum = hashlib.md5(bytedata).hexdigest()
 
           if hashsum == blockhashsum:
-            print 'Writing block from ' + peer['ip']
             rf.seek(blockindex * blocksize)
             rf.write(bytedata)
             break
@@ -151,7 +151,6 @@ def download(config, blocksize):
     rf.seek(0)
     sha256 = hashlib.sha256()
     sha256.update(rf.read())
-    print 'Hash for downloaded file: ' + str(sha256.hexdigest())
     if sha256.hexdigest() != config['filehash']:
       print 'Download success, but file is incorrect'
       return
